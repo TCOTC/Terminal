@@ -1,38 +1,94 @@
-/* 插件面板根（Tab.panelElement 已有 fn__flex-1）：占满 Dock 分配高度并向下传递 flex */
+/* 侧栏为多层 flex 嵌套时，默认 min-height: auto 会阻止子项低于内容高度，导致 xterm 量高错误 */
 .Terminal__panelRoot {
-  min-height: 0;
-  height: 100%;
+    min-height: 0;
 }
 
-/* 侧边栏终端：标题栏 + 终端区纵向铺满 */
 .Terminal__dock {
-  flex: 1;
-  min-height: 0;
+    min-height: 0;
 }
 
-.Terminal__mount.Terminal__root {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  padding: 0;
-  overflow: hidden;
+/* 工具栏 + 终端纵向分区：终端区参与 flex 且允许收缩 */
+.Terminal__root {
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    padding: 0 0 10px 10px; // 避开侧栏圆角
 }
 
-/* xterm 外层：flex 容器，避免 .xterm 只保留初次 fit 的像素高度、下方留白 */
+/* xterm 的 .xterm-viewport 为 absolute 贴父级四边，父级必须有确定高度 */
 .Terminal__xterm {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+    position: relative;
 }
 
 .Terminal__xterm > .xterm {
-  flex: 1;
-  min-height: 0;
+    height: 100%;
+    width: 100%;
 }
 
-.Terminal__xterm .xterm-viewport,
-.Terminal__xterm .xterm-screen {
-  width: 100%;
+/* 默认 viewport 为纯黑底，与思源主题错位；透明以露出 xterm 画布与主题背景 */
+.Terminal__xterm .xterm-viewport {
+    background-color: transparent !important;
+}
+
+/*
+ * 用 DOM 模拟思源 util/_scroll.scss 中 ::-webkit-scrollbar（10px）与 thumb（透明边 + inset 阴影）。
+ * 仅对 xterm 写在 style 上的宽高、背景色使用 !important；其余依赖选择器特异性（打包时 xterm.css 多在后面，用 .Terminal__xterm 前缀保证压过其表样式即可）。
+ * 仅对「仍可滚动但闲置淡出」态覆盖：xterm 在 isNeeded 且 !_shouldBeVisible 时会给节点加 invisible + fade（见 ScrollbarVisibilityController._hide(true)），
+ * 纯 invisible 无 fade 表示根本不需要滚动条，不可强行显示。
+ */
+.Terminal__xterm .xterm-scrollable-element > .scrollbar.invisible.fade {
+    opacity: 1;
+    pointer-events: auto;
+    z-index: 11;
+    transition: none;
+}
+
+.Terminal__xterm .xterm-scrollable-element > .scrollbar.vertical {
+    width: 10px !important;
+    cursor: default;
+    background-color: transparent;
+}
+
+.Terminal__xterm .xterm-scrollable-element > .scrollbar.vertical .slider {
+    width: 10px !important;
+    box-sizing: border-box;
+    border-top: 0;
+    border-bottom: 0;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-radius: var(--b3-border-radius);
+    box-shadow: inset 0 0 5px 5px var(--b3-scroll-color);
+    background: transparent !important;
+}
+
+.Terminal__xterm .xterm-scrollable-element > .scrollbar.vertical:hover .slider {
+    border-left-width: 1px;
+    border-right-width: 1px;
+}
+
+.Terminal__xterm .xterm-scrollable-element > .scrollbar.horizontal {
+    height: 10px !important;
+    cursor: default;
+    background-color: transparent;
+}
+
+.Terminal__xterm .xterm-scrollable-element > .scrollbar.horizontal .slider {
+    height: 10px !important;
+    box-sizing: border-box;
+    border-left: 0;
+    border-right: 0;
+    border-top: 4px solid transparent;
+    border-bottom: 4px solid transparent;
+    border-radius: var(--b3-border-radius);
+    box-shadow: inset 0 0 5px 5px var(--b3-scroll-color);
+    background: transparent !important;
+}
+
+.Terminal__xterm .xterm-scrollable-element > .scrollbar.horizontal:hover .slider {
+    border-top-width: 1px;
+    border-bottom-width: 1px;
 }

@@ -1,4 +1,4 @@
-import {Terminal, type ITheme} from "@xterm/xterm";
+import {Terminal} from "@xterm/xterm";
 import {FitAddon} from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import type {IDisposable, IPty, NodePtyModule} from "./nodePtyTypes";
@@ -73,25 +73,29 @@ function cloneEnv(nodeRequire: NodeJS.Require): {[key: string]: string | undefin
     return {...proc.env, TERM: "xterm-256color"};
 }
 
-/** 从思源当前主题 CSS 变量生成 xterm 配色（随明亮 / 暗黑与主题包变化） */
-function readCssVar(name: string, fallback: string): string {
-    const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-    return v || fallback;
-}
+/**
+ * 从思源当前主题 CSS 变量生成 xterm 配色（随明亮 / 暗黑与主题包变化）。
+ * 单次调用 getComputedStyle(document.documentElement)，其后再多次 getPropertyValue，避免反复取整棵计算样式。
+ */
+function buildSiyuanXtermTheme() {
+    const rootStyle = getComputedStyle(document.documentElement);
+    const css = (name: string, fallback: string): string => {
+        const raw = rootStyle.getPropertyValue(name).trim();
+        return raw || fallback;
+    };
 
-function buildSiyuanXtermTheme(): ITheme {
-    const bg = readCssVar("--b3-theme-background", "#1e1e1e");
-    const fg = readCssVar("--b3-theme-on-background", "#dadada");
-    const surface = readCssVar("--b3-theme-surface", "#2c2c2c");
-    const primary = readCssVar("--b3-theme-primary", "#3575f0");
-    const primaryLight = readCssVar("--b3-theme-primary-light", "rgba(53, 117, 240, .72)");
-    const error = readCssVar("--b3-theme-error", "#d23f31");
-    const success = readCssVar("--b3-theme-success", "#65b84d");
-    const secondary = readCssVar("--b3-theme-secondary", "#f3a92f");
-    const onSurface = readCssVar("--b3-theme-on-surface", "#9aa0a6");
-    const onSurfaceLight = readCssVar("--b3-theme-on-surface-light", "#bababa");
-    const selectionBg = readCssVar("--b3-theme-primary-lightest", "rgba(53, 117, 240, .24)");
-    const onPrimary = readCssVar("--b3-theme-on-primary", "#ffffff");
+    const bg = css("--b3-theme-background", "#1e1e1e");
+    const fg = css("--b3-theme-on-background", "#dadada");
+    const surface = css("--b3-theme-surface", "#2c2c2c");
+    const primary = css("--b3-theme-primary", "#3575f0");
+    const primaryLight = css("--b3-theme-primary-light", "rgba(53, 117, 240, .72)");
+    const error = css("--b3-theme-error", "#d23f31");
+    const success = css("--b3-theme-success", "#65b84d");
+    const secondary = css("--b3-theme-secondary", "#f3a92f");
+    const onSurface = css("--b3-theme-on-surface", "#9aa0a6");
+    const onSurfaceLight = css("--b3-theme-on-surface-light", "#bababa");
+    const selectionBg = css("--b3-theme-primary-lightest", "rgba(53, 117, 240, .24)");
+    const onPrimary = css("--b3-theme-on-primary", "#ffffff");
 
     return {
         background: bg,

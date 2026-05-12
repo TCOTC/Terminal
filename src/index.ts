@@ -79,12 +79,10 @@ export default class PluginTerminal extends Plugin {
                     const fontLargerAria = sy.languages.zoomIn;
                     el.innerHTML = `<div class="fn__flex-1 fn__flex-column Terminal__dock">
     <div class="block__icons">
-        <div class="block__logo">
-            <svg class="block__logoicon"><use xlink:href="#iconTerminal"></use></svg>${this.i18n.dockTitle}
-        </div>
+        <div class="block__logo">${this.i18n.dockTitle}</div>
         <span class="fn__flex-1 fn__space"></span>
-        <span data-type="fontSmaller" class="block__icon ariaLabel" data-position="north" aria-label="${fontSmallerAria}"><svg><use xlink:href="#iconZoomOut"></use></svg></span>
-        <span data-type="fontLarger" class="block__icon ariaLabel" data-position="north" aria-label="${fontLargerAria}"><svg><use xlink:href="#iconZoomIn"></use></svg></span>
+        <span data-type="fontSmaller" class="block__icon ariaLabel" data-position="north" aria-label="${fontSmallerAria}"><svg><use xlink:href="#iconZoomOut"></use></svg></span><div class="fn__space"></div>
+        <span data-type="fontLarger" class="block__icon ariaLabel" data-position="north" aria-label="${fontLargerAria}"><svg><use xlink:href="#iconZoomIn"></use></svg></span><div class="fn__space"></div>
         <span data-type="min" class="block__icon ariaLabel" data-position="north" aria-label="${minAria}"><svg><use xlink:href="#iconMin"></use></svg></span>
     </div>
     <div class="fn__flex-1 Terminal__mount"></div>
