@@ -1,6 +1,6 @@
 # Terminal
 
-A SiYuan plugin that opens a terminal in the sidebar (Dock), powered by xterm.js.
+A SiYuan plugin that opens a terminal in the sidebar (Dock), powered by [xterm.js](https://github.com/xtermjs/xterm.js) and [node-pty](https://github.com/microsoft/node-pty).
 
 > Note: This is currently a Vibe Coding demo—made to explore ideas, not a polished product. More features may be added later, or the direction may change; use it with that expectation.
 
