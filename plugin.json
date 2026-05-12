@@ -1,0 +1,33 @@
+{
+  "name": "Terminal",
+  "author": "TCOTC",
+  "url": "https://github.com/TCOTC/Terminal",
+  "version": "1.0.0",
+  "minAppVersion": "3.7.0",
+  "backends": [
+    "windows",
+    "linux",
+    "darwin"
+  ],
+  "frontends": [
+    "desktop"
+  ],
+  "disabledInPublish": true,
+  "displayName": {
+    "default": "Terminal",
+    "zh_CN": "终端"
+  },
+  "description": {
+    "default": "Use terminal in the sidebar",
+    "zh_CN": "在侧边栏使用终端"
+  },
+  "readme": {
+    "default": "README.md",
+    "zh_CN": "README_zh_CN.md"
+  },
+  "funding": {
+    "custom": [
+      "https://mytemos.com/"
+    ]
+  }
+}
