@@ -53,7 +53,8 @@ function sanitizePathSegment(s: string): string {
     return s.replace(/[^a-zA-Z0-9._-]+/g, "_");
 }
 
-function getCacheParentDir(dataDir: string, pluginName: string, nodeRequire: NodeJS.Require): string {
+/** `<WorkspaceDir>/temp/plugin-<name>`，与 `data/` 同级；node-pty 与本插件其它运行时产物均放其下子目录 */
+export function getPluginTempRootDir(dataDir: string, pluginName: string, nodeRequire: NodeJS.Require): string {
     const pathMod = nodeRequire("path") as typeof import("path");
     const workspaceRoot = pathMod.dirname(dataDir);
     return pathMod.join(workspaceRoot, "temp", `plugin-${pluginName}`);
@@ -65,7 +66,7 @@ export function getNodePtyBucketDir(dataDir: string, pluginName: string, nodeReq
     const proc = nodeRequire("process") as NodeJS.Process;
     const plat = `${proc.platform}-${proc.arch}`;
     const ver = sanitizePathSegment(NODE_PTY_RESOLVED_VERSION);
-    return pathMod.join(getCacheParentDir(dataDir, pluginName, nodeRequire), plat, ver);
+    return pathMod.join(getPluginTempRootDir(dataDir, pluginName, nodeRequire), plat, ver);
 }
 
 function markerPath(bucketDir: string, nodeRequire: NodeJS.Require): string {
@@ -159,7 +160,7 @@ function createPtyInstallLog(
 ): PtyInstallLog {
     const pathMod = nodeRequire("path") as typeof import("path");
     const fsMod = nodeRequire("fs") as typeof import("fs");
-    const logPath = pathMod.join(getCacheParentDir(dataDir, pluginName, nodeRequire), "pty-install.log");
+    const logPath = pathMod.join(getPluginTempRootDir(dataDir, pluginName, nodeRequire), "pty-install.log");
 
     return (message: string) => {
         const line = `[${new Date().toISOString()}] ${message}\n`;

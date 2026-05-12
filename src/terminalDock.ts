@@ -2,7 +2,7 @@ import {Terminal} from "@xterm/xterm";
 import {FitAddon} from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import type {IDisposable, IPty, NodePtyModule} from "./nodePtyTypes";
-import {needsOnlineNodePtyInstall, resolveNodePtyRoot} from "./nodePtyResolver";
+import {getPluginTempRootDir, needsOnlineNodePtyInstall, resolveNodePtyRoot} from "./nodePtyResolver";
 
 /** 侧边栏终端：xterm.js 与 node-pty 字节流对接（仅桌面端启用 PTY） */
 export interface SidebarTerminalI18n {
@@ -71,6 +71,113 @@ function pickCwd(nodeRequire: NodeJS.Require): string {
 function cloneEnv(nodeRequire: NodeJS.Require): {[key: string]: string | undefined} {
     const proc = nodeRequire("process") as NodeJS.Process;
     return {...proc.env, TERM: "xterm-256color"};
+}
+
+/** 供用户在 ~/.zshrc 等中判断「仅插件内嵌 PTY」；与 ZDOTDIR 方案可同时使用 */
+const SIYUAN_TERMINAL_PLUGIN_ENV = "SIYUAN_TERMINAL_PLUGIN";
+
+function shellPathLower(file: string): string {
+    return file.toLowerCase();
+}
+
+function isZshShell(file: string): boolean {
+    const p = shellPathLower(file);
+    return p.endsWith("/zsh") || p.endsWith("\\zsh") || p.endsWith("zsh.exe");
+}
+
+function isBashShell(file: string): boolean {
+    const p = shellPathLower(file);
+    return p.endsWith("/bash") || p.endsWith("\\bash") || p.endsWith("bash.exe");
+}
+
+function isCmdExe(file: string): boolean {
+    return shellPathLower(file).endsWith("cmd.exe");
+}
+
+function writeTextIfChanged(fsMod: typeof import("fs"), absPath: string, content: string): void {
+    try {
+        if (fsMod.readFileSync(absPath, "utf8") === content) {
+            return;
+        }
+    } catch {
+        // 文件不存在或不可读时重写
+    }
+    fsMod.writeFileSync(absPath, content, "utf8");
+}
+
+/**
+ * 为插件内嵌 PTY 缩短提示符，不修改系统终端。
+ * 生成文件落在 `<工作空间>/temp/plugin-<name>/terminal-profile/`（与 node-pty 缓存同级），不写 `data/plugins/<插件名>/` 安装目录。
+ * - zsh：使用独立 ZDOTDIR，在 source 个人配置后用 precmd 覆盖 PROMPT（避免 Oh My Zsh 等把长提示符写回）
+ * - bash：--rcfile 专用 rc，在加载个人配置后用 PROMPT_COMMAND 固定短 PS1
+ * - cmd.exe：仅设置环境变量 PROMPT
+ */
+function prepareEmbedOnlyPrompt(
+    nodeRequire: NodeJS.Require,
+    dataDir: string,
+    pluginName: string,
+    shellFile: string,
+    env: {[key: string]: string | undefined},
+): {args: string[]} {
+    env[SIYUAN_TERMINAL_PLUGIN_ENV] = "1";
+    const pathMod = nodeRequire("path") as typeof import("path");
+    const fsMod = nodeRequire("fs") as typeof import("fs");
+    const osMod = nodeRequire("os") as typeof import("os");
+
+    if (osMod.platform() === "win32") {
+        if (isCmdExe(shellFile)) {
+            env.PROMPT = "$G ";
+        }
+        return {args: []};
+    }
+
+    // 仅 zsh / bash 写入 terminal-profile；其它 Shell 仅用环境变量，避免留下空目录
+    const profileRoot = pathMod.join(getPluginTempRootDir(dataDir, pluginName, nodeRequire), "terminal-profile");
+
+    if (isZshShell(shellFile)) {
+        fsMod.mkdirSync(profileRoot, {recursive: true});
+        const zdot = pathMod.join(profileRoot, "zdot");
+        fsMod.mkdirSync(zdot, {recursive: true});
+        const zshenv = pathMod.join(zdot, ".zshenv");
+        const zshenvBody = `# 仅用于思源 Terminal 插件内嵌 PTY。设置 ZDOTDIR 后 zsh 只自动读该目录下的 .zshenv，此处再加载用户主目录下的 .zshenv（不写、不改用户文件）。
+[[ -r "$HOME/.zshenv" ]] && source "$HOME/.zshenv"
+`;
+        writeTextIfChanged(fsMod, zshenv, zshenvBody);
+        const zshrc = pathMod.join(zdot, ".zshrc");
+        const body = `# 仅用于思源 Terminal 插件内嵌 PTY（ZDOTDIR），不修改用户主目录下的任何文件；以下仅为 source 读取并执行。
+if [[ -r "$HOME/.zshrc" ]]; then
+  source "$HOME/.zshrc"
+fi
+function _siyuanTerminalShortPrompt() {
+  PROMPT='%F{cyan}%1~%f %# '
+  RPROMPT=''
+}
+precmd_functions+=(_siyuanTerminalShortPrompt)
+_siyuanTerminalShortPrompt
+`;
+        writeTextIfChanged(fsMod, zshrc, body);
+        env.ZDOTDIR = zdot;
+        return {args: []};
+    }
+
+    if (isBashShell(shellFile)) {
+        fsMod.mkdirSync(profileRoot, {recursive: true});
+        const bashRc = pathMod.join(profileRoot, "bash_plugin_rc");
+        const body = `# 仅用于思源 Terminal 插件内嵌 PTY（bash --rcfile），不影响系统自带终端应用。
+[[ -r /etc/bashrc ]] && source /etc/bashrc
+[[ -r "$HOME/.bashrc" ]] && source "$HOME/.bashrc"
+_siyuan_terminal_ps1() { export PS1='\\W$ '; }
+PROMPT_COMMAND="_siyuan_terminal_ps1\${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
+_siyuan_terminal_ps1
+`;
+        writeTextIfChanged(fsMod, bashRc, body);
+        return {args: ["--rcfile", bashRc, "-i"]};
+    }
+
+    if (isZshShell(shellFile) === false && isBashShell(shellFile) === false) {
+        env.PS1 = "\\W\\$ ";
+    }
+    return {args: []};
 }
 
 /**
@@ -309,9 +416,11 @@ export function createSidebarTerminal(options: CreateSidebarTerminalOptions): {
                 return;
             }
             const ptyMod = loadNodePtyModuleFromRoot(nodeRequire, ptyRoot);
-            const {file, args} = pickShell(nodeRequire);
+            const {file, args: pickArgs} = pickShell(nodeRequire);
             const cwd = pickCwd(nodeRequire);
             const env = cloneEnv(nodeRequire);
+            const {args: promptArgs} = prepareEmbedOnlyPrompt(nodeRequire, dataDir, pluginName, file, env);
+            const args = promptArgs.length > 0 ? promptArgs : pickArgs;
 
             fitAddon.fit();
             pty = ptyMod.spawn(file, args, {
