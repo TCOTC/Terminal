@@ -1,6 +1,6 @@
 import {Plugin, getFrontend} from "siyuan";
 import "./index.scss";
-import {createSidebarTerminal} from "./terminalDock";
+import {createSidebarTerminal, type TerminalGpuBackend} from "./terminalDock";
 
 const DOCK_TYPE = "dock_terminal";
 
@@ -45,7 +45,12 @@ function updateHotkeyAfterTip(hotkey: string, split = " "): string {
 
 export default class PluginTerminal extends Plugin {
 
-    private terminalDockApi?: {dispose: () => void; fit: () => void; bumpFontSize: (delta: number) => void};
+    private terminalDockApi?: {
+        dispose: () => void;
+        fit: () => void;
+        bumpFontSize: (delta: number) => void;
+        getRenderBackend: () => TerminalGpuBackend;
+    };
 
     onload() {
         const fe = getFrontend();

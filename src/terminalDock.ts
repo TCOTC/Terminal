@@ -1,8 +1,12 @@
 import {Terminal} from "@xterm/xterm";
 import {FitAddon} from "@xterm/addon-fit";
+import {Unicode11Addon} from "@xterm/addon-unicode11";
 import "@xterm/xterm/css/xterm.css";
 import type {IDisposable, IPty, NodePtyModule} from "./nodePtyTypes";
 import {getPluginTempRootDir, needsOnlineNodePtyInstall, resolveNodePtyRoot} from "./nodePtyResolver";
+import {attachTerminalGpuRenderer, type TerminalGpuBackend} from "./terminalGpuRenderer";
+
+export type {TerminalGpuBackend};
 
 /** 侧边栏终端：xterm.js 与 node-pty 字节流对接（仅桌面端启用 PTY） */
 export interface SidebarTerminalI18n {
@@ -35,9 +39,42 @@ type SiyuanWindow = Window & {
             system?: {dataDir?: string; workspaceDir?: string};
             dataDir?: string;
             workspaceDir?: string;
+            editor?: {
+                fontFamily?: string;
+                fontSize?: number;
+                fontWeight?: number;
+            };
         };
     };
 };
+
+/** 与 VS Code 在「未单独设置 terminal.integrated.fontFamily」时回退到 editor.fontFamily 的策略对齐 */
+const FALLBACK_TERMINAL_FONT_FAMILY =
+    'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "PingFang SC", "Hiragino Sans GB", "Heiti SC", "Microsoft YaHei UI"';
+
+function isMacintoshHost(): boolean {
+    return typeof navigator !== "undefined" && navigator.platform.toUpperCase().indexOf("MAC") > -1;
+}
+
+/**
+ * 对齐 VS Code `TerminalFontMetrics.getFont`：优先思源 `editor.fontFamily`，再追加 `, monospace`；
+ * macOS 再追加 `AppleBraille`（与 VS Code 一致，避免盲文格显示异常）。
+ */
+function resolveTerminalFontFromSiyuan(): {fontFamily: string; fontSize: number; fontWeight?: number} {
+    const editor = (window as SiyuanWindow).siyuan?.config?.editor;
+    const raw = editor?.fontFamily?.trim();
+    const base = raw && raw.length > 0 ? raw : FALLBACK_TERMINAL_FONT_FAMILY;
+    let fontFamily = `${base}, monospace`;
+    if (isMacintoshHost()) {
+        fontFamily += ", AppleBraille";
+    }
+    const fs = editor?.fontSize;
+    const fontSize =
+        typeof fs === "number" && Number.isFinite(fs) ? Math.min(32, Math.max(8, Math.round(fs))) : 15;
+    const w = editor?.fontWeight;
+    const fontWeight = typeof w === "number" && w > 0 ? w : undefined;
+    return {fontFamily, fontSize, fontWeight};
+}
 
 /** 与内核写入插件目录的约定一致：{workspaceDataDir}/plugins/<name>（前端为 config.system.dataDir） */
 function getWorkspaceDataDir(): string | undefined {
@@ -286,6 +323,8 @@ export function createSidebarTerminal(options: CreateSidebarTerminalOptions): {
     fit: () => void;
     /** 按像素步进调整终端字号并 refit */
     bumpFontSize: (delta: number) => void;
+    /** 当前 xterm 绘制后端：`webgl` | `canvas` | `dom`（WebGL 丢失上下文后会变为 `canvas`） */
+    getRenderBackend: () => TerminalGpuBackend;
 } {
     const {pluginName, layoutRoot, mount, canUsePty, i18n} = options;
     mount.textContent = "";
@@ -295,15 +334,31 @@ export function createSidebarTerminal(options: CreateSidebarTerminalOptions): {
     termContainer.className = "Terminal__xterm";
     mount.append(termContainer);
 
+    const tf = resolveTerminalFontFromSiyuan();
     const term = new Terminal({
+        /** Unicode11Addon 依赖 `terminal.unicode`（xterm 标记为 proposed API） */
+        allowProposedApi: true,
         cursorBlink: true,
-        fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+        fontFamily: tf.fontFamily,
+        fontSize: tf.fontSize,
+        ...(tf.fontWeight !== undefined ? {fontWeight: tf.fontWeight} : {}),
+        /** 与 VS Code `DEFAULT_LETTER_SPACING` 一致；显式写出，避免嵌入环境继承非 0 的 letter-spacing */
+        letterSpacing: 0,
         scrollback: 5000,
         theme: {...buildSiyuanXtermTheme()},
     });
     const fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
     term.open(termContainer);
+    /** 与 VS Code 默认 `terminal.integrated.unicodeVersion: 11` 对齐（不启用此前的调试 fetch，避免影响启动） */
+    try {
+        term.loadAddon(new Unicode11Addon());
+        term.unicode.activeVersion = "11";
+    } catch (err) {
+        console.warn("[Terminal] Unicode11Addon:", err);
+    }
+
+    const gpuRenderer = attachTerminalGpuRenderer(term);
 
     const themeCleanups: Array<() => void> = [];
     bindTerminalThemeToSiyuan(term, themeCleanups);
@@ -370,6 +425,7 @@ export function createSidebarTerminal(options: CreateSidebarTerminalOptions): {
             }
             pty = undefined;
         }
+        gpuRenderer.dispose();
         term.dispose();
     };
 
@@ -385,17 +441,25 @@ export function createSidebarTerminal(options: CreateSidebarTerminalOptions): {
         resizeObserver.observe(mount);
     }
     window.addEventListener("resize", onWindowResize);
-    requestAnimationFrame(() => fit());
+    requestAnimationFrame(() => {
+        fit();
+        console.info("[Terminal] 已启动", {
+            renderBackend: gpuRenderer.getBackend(),
+            cols: term.cols,
+            rows: term.rows,
+            ptyEnabled: canUsePty && typeof getNodeRequire() === "function",
+        });
+    });
 
     if (!canUsePty) {
         term.writeln(i18n.unsupportedEnv);
-        return {dispose, fit, bumpFontSize};
+        return {dispose, fit, bumpFontSize, getRenderBackend: () => gpuRenderer.getBackend()};
     }
 
     const nodeRequire = getNodeRequire();
     if (!nodeRequire) {
         term.writeln(i18n.unsupportedEnv);
-        return {dispose, fit, bumpFontSize};
+        return {dispose, fit, bumpFontSize, getRenderBackend: () => gpuRenderer.getBackend()};
     }
 
     void (async () => {
@@ -454,5 +518,5 @@ export function createSidebarTerminal(options: CreateSidebarTerminalOptions): {
         }
     })();
 
-    return {dispose, fit, bumpFontSize};
+    return {dispose, fit, bumpFontSize, getRenderBackend: () => gpuRenderer.getBackend()};
 }
