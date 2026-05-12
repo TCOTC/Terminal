@@ -1,6 +1,6 @@
 import {Plugin, getFrontend} from "siyuan";
 import "./index.scss";
-import {createSidebarTerminal, type TerminalGpuBackend} from "./terminalDock";
+import {dockSidebarTerminal} from "./terminalDock";
 
 const DOCK_TYPE = "dock_terminal";
 
@@ -44,18 +44,7 @@ function updateHotkeyAfterTip(hotkey: string, split = " "): string {
 }
 
 export default class PluginTerminal extends Plugin {
-
-    private terminalDockApi?: {
-        dispose: () => void;
-        fit: () => void;
-        bumpFontSize: (delta: number) => void;
-        getRenderBackend: () => TerminalGpuBackend;
-    };
-
     onload() {
-        const fe = getFrontend();
-        const isMobile = fe === "mobile" || fe === "browser-mobile";
-        let dockInitCancelled = false;
         this.addDock({
             config: {
                 position: "RightBottom",
@@ -70,20 +59,11 @@ export default class PluginTerminal extends Plugin {
             init: (custom) => {
                 const el = custom.element as HTMLElement;
                 el.classList.add("fn__flex-column", "Terminal__panelRoot");
-                if (isMobile) {
-                    el.innerHTML = `<div class="toolbar toolbar--border toolbar--dark">
-    <svg class="toolbar__icon"><use xlink:href="#iconTerminal"></use></svg>
-        <div class="toolbar__text">${this.i18n.dockTitle}</div>
-    </div>
-    <div class="fn__flex-1 fn__flex-column Terminal__dock">
-        <div class="fn__flex-1 Terminal__mount"></div>
-    </div>`;
-                } else {
-                    const sy = window.siyuan;
-                    const minAria = `${sy.languages.min}${updateHotkeyAfterTip(sy.config.keymap.general.closeTab.custom)}`;
-                    const fontSmallerAria = sy.languages.zoomOut;
-                    const fontLargerAria = sy.languages.zoomIn;
-                    el.innerHTML = `<div class="fn__flex-1 fn__flex-column Terminal__dock">
+                const sy = window.siyuan;
+                const minAria = `${sy.languages.min}${updateHotkeyAfterTip(sy.config.keymap.general.closeTab.custom)}`;
+                const fontSmallerAria = sy.languages.zoomOut;
+                const fontLargerAria = sy.languages.zoomIn;
+                el.innerHTML = `<div class="fn__flex-1 fn__flex-column Terminal__dock">
     <div class="block__icons">
         <div class="block__logo">${this.i18n.dockTitle}</div>
         <span class="fn__flex-1 fn__space"></span>
@@ -93,49 +73,35 @@ export default class PluginTerminal extends Plugin {
     </div>
     <div class="fn__flex-1 Terminal__mount"></div>
 </div>`;
-                }
                 const mount = el.querySelector(".Terminal__mount") as HTMLElement;
                 const canUsePty = getFrontend() === "desktop" && typeof (window as Window & {require?: unknown}).require === "function";
-                void (async () => {
-                    const api = await createSidebarTerminal({
-                        pluginName: this.name,
-                        layoutRoot: el,
-                        mount,
-                        canUsePty,
-                        i18n: {
-                            unsupportedEnv: this.i18n.unsupportedEnv as string,
-                            preparingPty: this.i18n.preparingPty as string,
-                            ptyFailed: this.i18n.ptyFailed as string,
-                        },
-                    });
-                    if (dockInitCancelled) {
-                        api.dispose();
-                        return;
-                    }
-                    this.terminalDockApi = api;
-                    if (!isMobile) {
-                        el.querySelector('[data-type="fontSmaller"]')?.addEventListener("click", () => {
-                            this.terminalDockApi?.bumpFontSize(-1);
-                        });
-                        el.querySelector('[data-type="fontLarger"]')?.addEventListener("click", () => {
-                            this.terminalDockApi?.bumpFontSize(1);
-                        });
-                    }
-                })();
+                dockSidebarTerminal.attach({
+                    pluginName: this.name,
+                    layoutRoot: el,
+                    mount,
+                    canUsePty,
+                    i18n: {
+                        unsupportedEnv: this.i18n.unsupportedEnv as string,
+                        preparingPty: this.i18n.preparingPty as string,
+                        ptyFailed: this.i18n.ptyFailed as string,
+                    },
+                });
+                el.querySelector('[data-type="fontSmaller"]')?.addEventListener("click", () => {
+                    dockSidebarTerminal.bumpFontSize(-1);
+                });
+                el.querySelector('[data-type="fontLarger"]')?.addEventListener("click", () => {
+                    dockSidebarTerminal.bumpFontSize(1);
+                });
             },
             resize: () => {
-                this.terminalDockApi?.fit();
+                dockSidebarTerminal.fit();
             },
-            destroy: () => {
-                dockInitCancelled = true;
-                this.terminalDockApi?.dispose();
-                this.terminalDockApi = undefined;
-            },
+            /** `removeTab` 会先 `panelElement.remove()` 再调 `destroy`；整棵子树仍在内存中，此处把 xterm 迁出以便新 `init` 再挂上 */
+            destroy: () => dockSidebarTerminal.detach(),
         });
     }
 
     onunload() {
-        this.terminalDockApi?.dispose();
-        this.terminalDockApi = undefined;
+        dockSidebarTerminal.disposePermanent();
     }
 }

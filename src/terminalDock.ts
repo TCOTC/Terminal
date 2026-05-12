@@ -394,14 +394,53 @@ function bindTerminalThemeToSiyuan(term: Terminal, cleanups: Array<() => void>):
     }
 }
 
-export async function createSidebarTerminal(options: CreateSidebarTerminalOptions): Promise<{
-    dispose: () => void;
-    fit: () => void;
-    /** 按像素步进调整终端字号并 refit */
-    bumpFontSize: (delta: number) => void;
-    /** 当前 xterm 绘制后端：`webgl` | `canvas` | `dom`（WebGL 丢失上下文后会变为 `canvas`） */
-    getRenderBackend: () => TerminalGpuBackend;
-}> {
+const OFFSCREEN_HOST_ID = "pluginTerminalOffscreenHost";
+
+function getOffscreenHost(): HTMLElement {
+    let host = document.getElementById(OFFSCREEN_HOST_ID) as HTMLElement | null;
+    if (!host) {
+        host = document.createElement("div");
+        host.id = OFFSCREEN_HOST_ID;
+        host.setAttribute("aria-hidden", "true");
+        host.style.cssText =
+            "position:fixed;left:0;top:0;width:0;height:0;margin:0;padding:0;overflow:hidden;opacity:0;pointer-events:none;visibility:hidden;";
+        document.body.appendChild(host);
+    }
+    return host;
+}
+
+type DockSidebarSession = {
+    pluginName: string;
+    canUsePty: boolean;
+    i18n: SidebarTerminalI18n;
+    term: Terminal;
+    fitAddon: FitAddon;
+    termContainer: HTMLDivElement;
+    gpuRenderer: ReturnType<typeof attachTerminalGpuRenderer>;
+    themeCleanups: Array<() => void>;
+    layoutRoot: HTMLElement;
+    mount: HTMLElement;
+    resizeObserver: ResizeObserver | undefined;
+    pty: IPty | undefined;
+    disposables: IDisposable[];
+    ptyInitCancelled: boolean;
+    /** `disposePermanent` 后递增，用于丢弃过期的异步回调 */
+    epoch: number;
+    windowResizeRaf: number;
+    resizeObserverRaf: number;
+    onWindowResize: () => void;
+    ptyBootstrapStarted: boolean;
+};
+
+let session: DockSidebarSession | null = null;
+
+function disposeResizeObserver(ro: ResizeObserver | undefined): void {
+    if (ro) {
+        ro.disconnect();
+    }
+}
+
+function createCoreSync(options: CreateSidebarTerminalOptions): DockSidebarSession {
     const {pluginName, layoutRoot, mount, canUsePty, i18n} = options;
     mount.textContent = "";
     mount.classList.add("Terminal__root");
@@ -410,8 +449,8 @@ export async function createSidebarTerminal(options: CreateSidebarTerminalOption
     termContainer.className = "Terminal__xterm";
     mount.append(termContainer);
 
-    const initialFontSize = await resolveInitialTerminalFontSizePx();
-    const tf = resolveTerminalFontFromSiyuan(initialFontSize);
+    const fontSizeSync = parseEditorFontSizeFromCssVar() ?? 11;
+    const tf = resolveTerminalFontFromSiyuan(fontSizeSync);
     const term = new Terminal({
         /** Unicode11Addon 依赖 `terminal.unicode`（xterm 标记为 proposed API） */
         allowProposedApi: true,
@@ -427,7 +466,6 @@ export async function createSidebarTerminal(options: CreateSidebarTerminalOption
     const fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
     term.open(termContainer);
-    /** 与 VS Code 默认 `terminal.integrated.unicodeVersion: 11` 对齐（不启用此前的调试 fetch，避免影响启动） */
     try {
         term.loadAddon(new Unicode11Addon());
         term.unicode.activeVersion = "11";
@@ -436,165 +474,298 @@ export async function createSidebarTerminal(options: CreateSidebarTerminalOption
     }
 
     const gpuRenderer = attachTerminalGpuRenderer(term);
-
     const themeCleanups: Array<() => void> = [];
     bindTerminalThemeToSiyuan(term, themeCleanups);
 
-    let pty: IPty | undefined;
-    const disposables: IDisposable[] = [];
-    let resizeObserver: ResizeObserver | undefined;
-    let windowResizeRaf = 0;
-    let resizeObserverRaf = 0;
-    let ptyInitCancelled = false;
+    return {
+        pluginName,
+        canUsePty,
+        i18n,
+        term,
+        fitAddon,
+        termContainer,
+        gpuRenderer,
+        themeCleanups,
+        layoutRoot,
+        mount,
+        resizeObserver: undefined,
+        pty: undefined,
+        disposables: [],
+        ptyInitCancelled: false,
+        epoch: 0,
+        windowResizeRaf: 0,
+        resizeObserverRaf: 0,
+        onWindowResize: () => {
+            // 占位，由 wireResizeAndFit 赋值为稳定引用以便 removeEventListener
+        },
+        ptyBootstrapStarted: false,
+    };
+}
 
-    const fit = () => {
-        try {
-            fitAddon.fit();
-        } catch {
-            // 尺寸为 0 时 fit 可能失败，忽略即可
-        }
-        if (pty) {
-            pty.resize(term.cols, term.rows);
-        }
+function fitDockSession(s: DockSidebarSession): void {
+    try {
+        s.fitAddon.fit();
+    } catch {
+        // 尺寸为 0 时 fit 可能失败，忽略即可
+    }
+    if (s.pty) {
+        s.pty.resize(s.term.cols, s.term.rows);
+    }
+}
+
+function wireResizeAndFit(s: DockSidebarSession): void {
+    window.removeEventListener("resize", s.onWindowResize);
+    s.onWindowResize = () => {
+        cancelAnimationFrame(s.windowResizeRaf);
+        s.windowResizeRaf = requestAnimationFrame(() => {
+            s.windowResizeRaf = 0;
+            fitDockSession(s);
+        });
     };
 
-    const bumpFontSize = (delta: number) => {
-        const current = term.options.fontSize ?? 11;
-        const next = Math.min(32, Math.max(8, Math.round(current + delta)));
-        if (next === current) {
+    disposeResizeObserver(s.resizeObserver);
+    s.resizeObserver = new ResizeObserver(() => {
+        cancelAnimationFrame(s.resizeObserverRaf);
+        s.resizeObserverRaf = requestAnimationFrame(() => {
+            s.resizeObserverRaf = 0;
+            fitDockSession(s);
+        });
+    });
+    s.resizeObserver.observe(s.layoutRoot);
+    if (s.layoutRoot !== s.mount) {
+        s.resizeObserver.observe(s.mount);
+    }
+    window.addEventListener("resize", s.onWindowResize);
+    requestAnimationFrame(() => {
+        fitDockSession(s);
+        if (s === session) {
+            console.info("[Terminal] 已启动", {
+                renderBackend: s.gpuRenderer.getBackend(),
+                cols: s.term.cols,
+                rows: s.term.rows,
+                ptyEnabled: s.canUsePty && typeof getNodeRequire() === "function",
+            });
+        }
+    });
+}
+
+function detachDockSessionFromDom(s: DockSidebarSession): void {
+    window.removeEventListener("resize", s.onWindowResize);
+    cancelAnimationFrame(s.windowResizeRaf);
+    cancelAnimationFrame(s.resizeObserverRaf);
+    s.windowResizeRaf = 0;
+    s.resizeObserverRaf = 0;
+    disposeResizeObserver(s.resizeObserver);
+    s.resizeObserver = undefined;
+    if (s.termContainer.parentNode) {
+        s.termContainer.parentNode.removeChild(s.termContainer);
+    }
+    getOffscreenHost().appendChild(s.termContainer);
+}
+
+function startPersistedFontAsync(s: DockSidebarSession): void {
+    const epochAtStart = s.epoch;
+    void (async () => {
+        const px = await resolveInitialTerminalFontSizePx();
+        if (!session || session !== s || s.epoch !== epochAtStart) {
             return;
         }
-        term.options.fontSize = next;
-        persistTerminalFontSize(next);
-        fit();
-    };
-
-    const onWindowResize = () => {
-        cancelAnimationFrame(windowResizeRaf);
-        windowResizeRaf = requestAnimationFrame(() => {
-            windowResizeRaf = 0;
-            fit();
-        });
-    };
-
-    const dispose = () => {
-        ptyInitCancelled = true;
-        window.removeEventListener("resize", onWindowResize);
-        cancelAnimationFrame(windowResizeRaf);
-        cancelAnimationFrame(resizeObserverRaf);
-        windowResizeRaf = 0;
-        resizeObserverRaf = 0;
-        const pendingTheme = themeCleanups.slice();
-        themeCleanups.length = 0;
-        pendingTheme.forEach((fn) => {
-            fn();
-        });
-        if (resizeObserver) {
-            resizeObserver.disconnect();
-            resizeObserver = undefined;
+        const tf = resolveTerminalFontFromSiyuan(px);
+        s.term.options.fontFamily = tf.fontFamily;
+        s.term.options.fontSize = tf.fontSize;
+        if (tf.fontWeight !== undefined) {
+            s.term.options.fontWeight = tf.fontWeight;
+        } else {
+            delete s.term.options.fontWeight;
         }
-        disposables.forEach((d) => d.dispose());
-        disposables.length = 0;
-        if (pty) {
-            try {
-                pty.kill();
-            } catch {
-                // 已退出时忽略
-            }
-            pty = undefined;
-        }
-        gpuRenderer.dispose();
-        term.dispose();
-    };
+        fitDockSession(s);
+    })();
+}
 
-    resizeObserver = new ResizeObserver(() => {
-        cancelAnimationFrame(resizeObserverRaf);
-        resizeObserverRaf = requestAnimationFrame(() => {
-            resizeObserverRaf = 0;
-            fit();
-        });
-    });
-    resizeObserver.observe(layoutRoot);
-    if (layoutRoot !== mount) {
-        resizeObserver.observe(mount);
+function trySpawnPty(s: DockSidebarSession): void {
+    if (s.ptyBootstrapStarted) {
+        return;
     }
-    window.addEventListener("resize", onWindowResize);
-    requestAnimationFrame(() => {
-        fit();
-        console.info("[Terminal] 已启动", {
-            renderBackend: gpuRenderer.getBackend(),
-            cols: term.cols,
-            rows: term.rows,
-            ptyEnabled: canUsePty && typeof getNodeRequire() === "function",
-        });
-    });
-
-    if (!canUsePty) {
-        term.writeln(i18n.unsupportedEnv);
-        return {dispose, fit, bumpFontSize, getRenderBackend: () => gpuRenderer.getBackend()};
+    s.ptyBootstrapStarted = true;
+    const epochAtStart = s.epoch;
+    if (!s.canUsePty) {
+        s.term.writeln(s.i18n.unsupportedEnv);
+        return;
     }
-
     const nodeRequire = getNodeRequire();
     if (!nodeRequire) {
-        term.writeln(i18n.unsupportedEnv);
-        return {dispose, fit, bumpFontSize, getRenderBackend: () => gpuRenderer.getBackend()};
+        s.term.writeln(s.i18n.unsupportedEnv);
+        return;
     }
 
     void (async () => {
         const dataDir = getWorkspaceDataDir();
         if (!dataDir) {
-            if (!ptyInitCancelled) {
-                term.writeln(i18n.ptyFailed.replace("${msg}", "siyuan.config.system.dataDir is missing"));
+            if (!session || session !== s || s.epoch !== epochAtStart) {
+                return;
+            }
+            if (!s.ptyInitCancelled) {
+                s.term.writeln(s.i18n.ptyFailed.replace("${msg}", "siyuan.config.system.dataDir is missing"));
             }
             return;
         }
 
         try {
-            if (needsOnlineNodePtyInstall(dataDir, pluginName, nodeRequire) && !ptyInitCancelled) {
-                term.writeln(i18n.preparingPty);
+            if (needsOnlineNodePtyInstall(dataDir, s.pluginName, nodeRequire) && !s.ptyInitCancelled) {
+                s.term.writeln(s.i18n.preparingPty);
             }
-            const ptyRoot = await resolveNodePtyRoot(dataDir, pluginName, nodeRequire);
-            if (ptyInitCancelled) {
+            const ptyRoot = await resolveNodePtyRoot(dataDir, s.pluginName, nodeRequire);
+            if (!session || session !== s || s.epoch !== epochAtStart || s.ptyInitCancelled) {
                 return;
             }
             const ptyMod = loadNodePtyModuleFromRoot(nodeRequire, ptyRoot);
             const {file, args: pickArgs} = pickShell(nodeRequire);
             const cwd = pickCwd(nodeRequire);
             const env = cloneEnv(nodeRequire);
-            const {args: promptArgs} = prepareEmbedOnlyPrompt(nodeRequire, dataDir, pluginName, file, env);
+            const {args: promptArgs} = prepareEmbedOnlyPrompt(nodeRequire, dataDir, s.pluginName, file, env);
             const args = promptArgs.length > 0 ? promptArgs : pickArgs;
 
-            fitAddon.fit();
-            pty = ptyMod.spawn(file, args, {
+            s.fitAddon.fit();
+            const pty = ptyMod.spawn(file, args, {
                 name: "xterm-256color",
-                cols: term.cols,
-                rows: term.rows,
+                cols: s.term.cols,
+                rows: s.term.rows,
                 cwd,
                 env,
             });
+            s.pty = pty;
 
-            disposables.push(
+            s.disposables.push(
                 pty.onData((data: string) => {
-                    term.write(data);
+                    s.term.write(data);
                 }),
             );
-            disposables.push(
+            s.disposables.push(
                 pty.onExit(() => {
-                    term.writeln("\r\n\x1b[33m[exit]\x1b[0m");
+                    s.term.writeln("\r\n\x1b[33m[exit]\x1b[0m");
                 }),
             );
 
-            term.onData((data) => {
-                pty?.write(data);
+            s.term.onData((data) => {
+                s.pty?.write(data);
             });
         } catch (e) {
-            if (ptyInitCancelled) {
+            if (!session || session !== s || s.epoch !== epochAtStart) {
+                return;
+            }
+            if (s.ptyInitCancelled) {
                 return;
             }
             const msg = e instanceof Error ? e.message : String(e);
-            term.writeln(i18n.ptyFailed.replace("${msg}", msg));
+            s.term.writeln(s.i18n.ptyFailed.replace("${msg}", msg));
         }
     })();
-
-    return {dispose, fit, bumpFontSize, getRenderBackend: () => gpuRenderer.getBackend()};
 }
+
+function disposeDockSessionPermanent(): void {
+    if (!session) {
+        return;
+    }
+    const s = session;
+    session = null;
+    s.epoch += 1;
+    s.ptyInitCancelled = true;
+
+    window.removeEventListener("resize", s.onWindowResize);
+    cancelAnimationFrame(s.windowResizeRaf);
+    cancelAnimationFrame(s.resizeObserverRaf);
+    s.windowResizeRaf = 0;
+    s.resizeObserverRaf = 0;
+
+    const pendingTheme = s.themeCleanups.slice();
+    s.themeCleanups.length = 0;
+    pendingTheme.forEach((fn) => {
+        fn();
+    });
+    disposeResizeObserver(s.resizeObserver);
+    s.disposables.forEach((d) => d.dispose());
+    s.disposables.length = 0;
+    if (s.pty) {
+        try {
+            s.pty.kill();
+        } catch {
+            // 已退出时忽略
+        }
+        s.pty = undefined;
+    }
+    s.gpuRenderer.dispose();
+    s.term.dispose();
+
+    const host = document.getElementById(OFFSCREEN_HOST_ID);
+    if (host?.parentNode) {
+        host.remove();
+    }
+}
+
+/**
+ * Dock 终端全局单例：Dock 换栏时 `destroy` 中把 xterm DOM 迁出已 `remove()` 的面板子树，新 `init` 再挂回；
+ * 仅 `disposePermanent`（插件 `onunload`）结束 PTY 并销毁 xterm。
+ */
+export const dockSidebarTerminal = {
+    attach(options: CreateSidebarTerminalOptions): void {
+        if (!session) {
+            session = createCoreSync(options);
+        } else {
+            session.layoutRoot = options.layoutRoot;
+            session.mount = options.mount;
+            session.pluginName = options.pluginName;
+            session.canUsePty = options.canUsePty;
+            session.i18n = options.i18n;
+            options.mount.classList.add("Terminal__root");
+            options.mount.append(session.termContainer);
+        }
+        wireResizeAndFit(session);
+
+        if (session.ptyBootstrapStarted === false) {
+            startPersistedFontAsync(session);
+            trySpawnPty(session);
+        } else {
+            requestAnimationFrame(() => {
+                if (session) {
+                    fitDockSession(session);
+                }
+            });
+        }
+    },
+
+    detach(): void {
+        if (!session) {
+            return;
+        }
+        detachDockSessionFromDom(session);
+    },
+
+    disposePermanent(): void {
+        disposeDockSessionPermanent();
+    },
+
+    fit(): void {
+        if (session) {
+            fitDockSession(session);
+        }
+    },
+
+    bumpFontSize(delta: number): void {
+        if (!session) {
+            return;
+        }
+        const s = session;
+        const current = s.term.options.fontSize ?? 11;
+        const next = Math.min(32, Math.max(8, Math.round(current + delta)));
+        if (next === current) {
+            return;
+        }
+        s.term.options.fontSize = next;
+        persistTerminalFontSize(next);
+        fitDockSession(s);
+    },
+
+    getRenderBackend(): TerminalGpuBackend {
+        return session ? session.gpuRenderer.getBackend() : "dom";
+    },
+};
