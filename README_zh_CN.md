@@ -8,3 +8,7 @@
 
 - 需在 Windows、Linux 或 macOS 上使用思源客户端；作者仅在 Mac 上开发与使用，尚未在其他系统实测。  
 - 客户端版本不低于集市或插件详情页所标注的最低兼容要求。
+
+## 鸣谢
+
+感谢 [obsidian-terminal](https://github.com/polyipseity/obsidian-terminal) 项目为本插件提供了灵感。
