@@ -7,6 +7,23 @@
     min-height: 0;
 }
 
+/* 终端区域相对定位，空状态层绝对铺满以便居中按钮 */
+.Terminal__body {
+    min-height: 0;
+    position: relative;
+}
+
+.Terminal__empty {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+    padding: 12px;
+    background-color: var(--b3-theme-background);
+}
+
 /* 工具栏 + 终端纵向分区：终端区参与 flex 且允许收缩 */
 .Terminal__root {
     min-height: 0;

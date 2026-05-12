@@ -63,34 +63,71 @@ export default class PluginTerminal extends Plugin {
                 const minAria = `${sy.languages.min}${updateHotkeyAfterTip(sy.config.keymap.general.closeTab.custom)}`;
                 const fontSmallerAria = sy.languages.zoomOut;
                 const fontLargerAria = sy.languages.zoomIn;
+                const closeTerminal = this.i18n.closeTerminal as string;
+                const openNewTerminal = this.i18n.openNewTerminal as string;
                 el.innerHTML = `<div class="fn__flex-1 fn__flex-column Terminal__dock">
     <div class="block__icons">
         <div class="block__logo">${this.i18n.dockTitle}</div>
         <span class="fn__flex-1 fn__space"></span>
+        <span data-type="closeTerminal" class="block__icon ariaLabel" data-position="north" aria-label="${closeTerminal}"><svg><use xlink:href="#iconClose"></use></svg></span><div class="fn__space"></div>
+        <span data-type="openNewTerminal" class="block__icon ariaLabel" data-position="north" aria-label="${openNewTerminal}"><svg><use xlink:href="#iconAdd"></use></svg></span><div class="fn__space"></div>
         <span data-type="fontSmaller" class="block__icon ariaLabel" data-position="north" aria-label="${fontSmallerAria}"><svg><use xlink:href="#iconZoomOut"></use></svg></span><div class="fn__space"></div>
         <span data-type="fontLarger" class="block__icon ariaLabel" data-position="north" aria-label="${fontLargerAria}"><svg><use xlink:href="#iconZoomIn"></use></svg></span><div class="fn__space"></div>
         <span data-type="min" class="block__icon ariaLabel" data-position="north" aria-label="${minAria}"><svg><use xlink:href="#iconMin"></use></svg></span>
     </div>
-    <div class="fn__flex-1 Terminal__mount"></div>
+    <div class="fn__flex-1 fn__flex-column Terminal__body">
+        <div class="fn__flex-1 Terminal__mount"></div>
+        <div class="Terminal__empty fn__none">
+            <button type="button" class="b3-button b3-button--outline Terminal__emptyOpen" aria-label="${openNewTerminal}">${openNewTerminal}</button>
+        </div>
+    </div>
 </div>`;
                 const mount = el.querySelector(".Terminal__mount") as HTMLElement;
+                const emptyState = el.querySelector(".Terminal__empty") as HTMLElement;
                 const canUsePty = getFrontend() === "desktop" && typeof (window as Window & {require?: unknown}).require === "function";
-                dockSidebarTerminal.attach({
-                    pluginName: this.name,
-                    layoutRoot: el,
-                    mount,
-                    canUsePty,
-                    i18n: {
-                        unsupportedEnv: this.i18n.unsupportedEnv as string,
-                        preparingPty: this.i18n.preparingPty as string,
-                        ptyFailed: this.i18n.ptyFailed as string,
-                    },
-                });
+                const sidebarI18n = {
+                    unsupportedEnv: this.i18n.unsupportedEnv as string,
+                    preparingPty: this.i18n.preparingPty as string,
+                    ptyFailed: this.i18n.ptyFailed as string,
+                };
+                const hideTerminalEmptyState = () => {
+                    emptyState.classList.add("fn__none");
+                };
+                const showTerminalEmptyState = () => {
+                    emptyState.classList.remove("fn__none");
+                };
+                const attachSidebarTerminal = () => {
+                    hideTerminalEmptyState();
+                    dockSidebarTerminal.attach({
+                        pluginName: this.name,
+                        layoutRoot: el,
+                        mount,
+                        canUsePty,
+                        i18n: sidebarI18n,
+                    });
+                };
+                const openNewTerminalSession = () => {
+                    dockSidebarTerminal.disposePermanent();
+                    mount.replaceChildren();
+                    attachSidebarTerminal();
+                };
+                attachSidebarTerminal();
                 el.querySelector('[data-type="fontSmaller"]')?.addEventListener("click", () => {
                     dockSidebarTerminal.bumpFontSize(-1);
                 });
                 el.querySelector('[data-type="fontLarger"]')?.addEventListener("click", () => {
                     dockSidebarTerminal.bumpFontSize(1);
+                });
+                el.querySelector('[data-type="closeTerminal"]')?.addEventListener("click", () => {
+                    dockSidebarTerminal.disposePermanent();
+                    mount.replaceChildren();
+                    showTerminalEmptyState();
+                });
+                el.querySelector('[data-type="openNewTerminal"]')?.addEventListener("click", () => {
+                    openNewTerminalSession();
+                });
+                emptyState.querySelector(".Terminal__emptyOpen")?.addEventListener("click", () => {
+                    openNewTerminalSession();
                 });
             },
             resize: () => {

@@ -1,5 +1,7 @@
 {
   "dockTitle": "Terminal",
+  "closeTerminal": "Close terminal",
+  "openNewTerminal": "Open a new terminal",
   "unsupportedEnv": "Interactive terminal requires the desktop app with Node integration.",
   "preparingPty": "Fetching node-pty from the npm registry; this may take a while…",
   "ptyFailed": "Failed to load PTY: ${msg}"
