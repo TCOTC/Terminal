@@ -1,11 +1,14 @@
 import {Terminal, type ITheme} from "@xterm/xterm";
 import {FitAddon} from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
-import type {IDisposable, IPty} from "node-pty";
+import type {IDisposable, IPty, NodePtyModule} from "./nodePtyTypes";
+import {needsOnlineNodePtyInstall, resolveNodePtyRoot} from "./nodePtyResolver";
 
 /** 侧边栏终端：xterm.js 与 node-pty 字节流对接（仅桌面端启用 PTY） */
 export interface SidebarTerminalI18n {
     unsupportedEnv: string;
+    /** 首次从 registry 拉取 node-pty 时提示 */
+    preparingPty: string;
     ptyFailed: string;
 }
 
@@ -18,11 +21,11 @@ export interface CreateSidebarTerminalOptions {
     i18n: SidebarTerminalI18n;
 }
 
-function getNodeRequire(): NodeRequire | undefined {
+function getNodeRequire(): NodeJS.Require | undefined {
     if (typeof window === "undefined") {
         return undefined;
     }
-    const wr = (window as Window & {require?: NodeRequire}).require;
+    const wr = (window as Window & {require?: NodeJS.Require}).require;
     return typeof wr === "function" ? wr : undefined;
 }
 
@@ -42,18 +45,11 @@ function getWorkspaceDataDir(): string | undefined {
     return cfg?.system?.dataDir || cfg?.dataDir;
 }
 
-function loadNodePtyModule(pluginName: string, nodeRequire: NodeRequire): typeof import("node-pty") {
-    const pathMod = nodeRequire("path") as typeof import("path");
-    const dataDir = getWorkspaceDataDir();
-    if (!dataDir) {
-        throw new Error("siyuan.config.system.dataDir is missing");
-    }
-    const pluginRoot = pathMod.join(dataDir, "plugins", pluginName);
-    const ptyMain = pathMod.join(pluginRoot, "node_modules", "node-pty");
-    return nodeRequire(ptyMain) as typeof import("node-pty");
+function loadNodePtyModuleFromRoot(nodeRequire: NodeJS.Require, ptyRoot: string): NodePtyModule {
+    return nodeRequire(ptyRoot) as NodePtyModule;
 }
 
-function pickShell(nodeRequire: NodeRequire): {file: string; args: string[]} {
+function pickShell(nodeRequire: NodeJS.Require): {file: string; args: string[]} {
     const osMod = nodeRequire("os") as typeof import("os");
     if (osMod.platform() === "win32") {
         const proc = nodeRequire("process") as NodeJS.Process;
@@ -65,14 +61,14 @@ function pickShell(nodeRequire: NodeRequire): {file: string; args: string[]} {
     return {file: sh && sh.length > 0 ? sh : "/bin/bash", args: []};
 }
 
-function pickCwd(nodeRequire: NodeRequire): string {
+function pickCwd(nodeRequire: NodeJS.Require): string {
     const osMod = nodeRequire("os") as typeof import("os");
     const cfg = (window as SiyuanWindow).siyuan?.config;
     const dir = cfg?.system?.workspaceDir || cfg?.system?.dataDir || cfg?.workspaceDir || cfg?.dataDir;
     return dir && dir.length > 0 ? dir : osMod.homedir();
 }
 
-function cloneEnv(nodeRequire: NodeRequire): {[key: string]: string | undefined} {
+function cloneEnv(nodeRequire: NodeJS.Require): {[key: string]: string | undefined} {
     const proc = nodeRequire("process") as NodeJS.Process;
     return {...proc.env, TERM: "xterm-256color"};
 }
@@ -206,6 +202,7 @@ export function createSidebarTerminal(options: CreateSidebarTerminalOptions): {
     let resizeObserver: ResizeObserver | undefined;
     let windowResizeRaf = 0;
     let resizeObserverRaf = 0;
+    let ptyInitCancelled = false;
 
     const fit = () => {
         try {
@@ -237,6 +234,7 @@ export function createSidebarTerminal(options: CreateSidebarTerminalOptions): {
     };
 
     const dispose = () => {
+        ptyInitCancelled = true;
         window.removeEventListener("resize", onWindowResize);
         cancelAnimationFrame(windowResizeRaf);
         cancelAnimationFrame(resizeObserverRaf);
@@ -289,36 +287,59 @@ export function createSidebarTerminal(options: CreateSidebarTerminalOptions): {
         return {dispose, fit, bumpFontSize};
     }
 
-    try {
-        const ptyMod = loadNodePtyModule(pluginName, nodeRequire);
-        const {file, args} = pickShell(nodeRequire);
-        const cwd = pickCwd(nodeRequire);
-        const env = cloneEnv(nodeRequire);
+    void (async () => {
+        const dataDir = getWorkspaceDataDir();
+        if (!dataDir) {
+            if (!ptyInitCancelled) {
+                term.writeln(i18n.ptyFailed.replace("${msg}", "siyuan.config.system.dataDir is missing"));
+            }
+            return;
+        }
 
-        fitAddon.fit();
-        pty = ptyMod.spawn(file, args, {
-            name: "xterm-256color",
-            cols: term.cols,
-            rows: term.rows,
-            cwd,
-            env,
-        });
+        try {
+            if (needsOnlineNodePtyInstall(dataDir, pluginName, nodeRequire) && !ptyInitCancelled) {
+                term.writeln(i18n.preparingPty);
+            }
+            const ptyRoot = await resolveNodePtyRoot(dataDir, pluginName, nodeRequire);
+            if (ptyInitCancelled) {
+                return;
+            }
+            const ptyMod = loadNodePtyModuleFromRoot(nodeRequire, ptyRoot);
+            const {file, args} = pickShell(nodeRequire);
+            const cwd = pickCwd(nodeRequire);
+            const env = cloneEnv(nodeRequire);
 
-        disposables.push(pty.onData((data: string) => {
-            term.write(data);
-        }));
-        disposables.push(pty.onExit(() => {
-            term.writeln("\r\n\x1b[33m[exit]\x1b[0m");
-        }));
+            fitAddon.fit();
+            pty = ptyMod.spawn(file, args, {
+                name: "xterm-256color",
+                cols: term.cols,
+                rows: term.rows,
+                cwd,
+                env,
+            });
 
-        term.onData((data) => {
-            pty?.write(data);
-        });
-    } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        term.writeln(i18n.ptyFailed.replace("${msg}", msg));
-        return {dispose, fit, bumpFontSize};
-    }
+            disposables.push(
+                pty.onData((data: string) => {
+                    term.write(data);
+                }),
+            );
+            disposables.push(
+                pty.onExit(() => {
+                    term.writeln("\r\n\x1b[33m[exit]\x1b[0m");
+                }),
+            );
+
+            term.onData((data) => {
+                pty?.write(data);
+            });
+        } catch (e) {
+            if (ptyInitCancelled) {
+                return;
+            }
+            const msg = e instanceof Error ? e.message : String(e);
+            term.writeln(i18n.ptyFailed.replace("${msg}", msg));
+        }
+    })();
 
     return {dispose, fit, bumpFontSize};
 }

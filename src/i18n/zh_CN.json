@@ -1,5 +1,6 @@
 {
   "dockTitle": "终端",
   "unsupportedEnv": "当前环境无法使用交互式终端（需桌面端且启用 Node 集成）。",
+  "preparingPty": "正在从 npm registry 准备终端组件（node-pty），需要一段时间…",
   "ptyFailed": "加载 PTY 失败：${msg}"
 }

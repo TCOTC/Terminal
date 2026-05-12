@@ -99,6 +99,7 @@ export default class PluginTerminal extends Plugin {
                     canUsePty,
                     i18n: {
                         unsupportedEnv: this.i18n.unsupportedEnv as string,
+                        preparingPty: this.i18n.preparingPty as string,
                         ptyFailed: this.i18n.ptyFailed as string,
                     },
                 });

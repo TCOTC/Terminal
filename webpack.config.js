@@ -25,11 +25,6 @@ module.exports = (env, argv) => {
                 {from: "README*.md", to: "./dist/"},
                 {from: "plugin.json", to: "./dist/"},
                 {from: "src/i18n/", to: "./dist/i18n/"},
-                // 发版 zip 需包含 node-pty 原生模块，运行时从插件目录 require
-                {
-                    from: path.resolve(__dirname, "node_modules/node-pty"),
-                    to: path.resolve(__dirname, "dist/node_modules/node-pty"),
-                },
             ],
         }));
         plugins.push(new ZipPlugin({

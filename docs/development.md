@@ -23,7 +23,8 @@
 ## 本机 Shell 与 PTY
 
 - **方向**：在具备 Node 的前提下，使用 **`node-pty`** 创建伪终端，挂载用户默认 shell（如 bash / zsh），与 xterm 的 **标准输入输出字节流** 对接。
-- **注意**：`node-pty` 为**原生模块**，需与思源当前内置的 **Electron / Node ABI** 匹配；发版或升级思源版本时，需按官方或社区惯例做 **rebuild** 或按目标 Electron 版本编译，避免加载失败。
+- **注意**：`node-pty` 为**原生模块**，须与思源当前内置的 **Electron / Node ABI** 匹配。发版 zip **不再** 随包携带 `node_modules/node-pty`；终端组件在 **桌面端首次需要时** 从 **npm registry** 拉取与 **`NODE_PTY_RESOLVED_VERSION`**（见 [`src/nodePtyResolver.ts`](../src/nodePtyResolver.ts)）一致的官方 tarball，校验 **integrity** 后解压到工作空间 **`temp/plugin-<插件名>/<platform>-<arch>/<版本>/…`**（与 `data/` 同级，**不参与** 以 `DataDir` 为根的同步树）。缓存分桶按 **平台 / 架构** 与 **`NODE_PTY_RESOLVED_VERSION`**；路径 **不含** `process.versions.modules`，详见 [node-pty-prebuild-cache.md](./node-pty-prebuild-cache.md)。
+- **备选构思**（Rust sidecar）：见 [rust-pty-sidecar.md](./rust-pty-sidecar.md)。
 
 ## 架构关系（简述）
 
@@ -40,7 +41,9 @@ shell 输出 → node-pty → 字节流 → xterm.js → 屏幕
 
 ## 开发与发版
 
-- **安装依赖**：在插件目录执行 `pnpm install`。
-- **原生模块**：`node-pty` 需与思源内置 **Electron** 的 ABI 一致。请以思源主仓 [app/package.json](https://github.com/siyuan-note/siyuan/blob/master/app/package.json) 中的 `electron` 版本为准，在插件目录执行 `pnpm run rebuild-native`（内部为 `electron-rebuild -f -w node-pty`）。升级思源后若终端无法加载，应重新核对 Electron 版本并再次 rebuild。
-- **发版产物**：生产构建会将 `node_modules/node-pty` 复制到 `dist/node_modules/node-pty` 并打入 `package.zip`，解压到工作空间 `data/plugins/<插件名>/` 后应与 `index.js` 同级提供 `node_modules`，无需在目标环境再执行 `pnpm install` 即可加载 PTY（体积含各平台预编译文件，属预期现象）。
+- **安装依赖**：在插件目录执行 `pnpm install`（**不包含** `node-pty` npm 包；运行时从 registry 拉取至 `temp/`）。
+- **开发与发版一致**：无论 `pnpm dev` 还是安装 `package.zip`，终端均只从 **`<工作空间>/temp/plugin-<插件名>/…`** 加载已下载的 `node-pty`；首次或缓存未命中时需 **联网** 与可用 **`tar`**。若官方预编译与当前思源 Electron **ABI 不兼容**，需升级思源或在本插件 [`src/nodePtyResolver.ts`](../src/nodePtyResolver.ts) 中调整 **`NODE_PTY_RESOLVED_VERSION`** 并充分回归。
+- **Registry 与网络**：会 **按顺序** 尝试内置源拉取 packument（**`registry.npmjs.org`** → **`registry.npmmirror.com`**，按 origin 去重）；响应中的 **tarball** 用于下载。本地验证：`pnpm run test:registry`。
+- **安装排错**：每次解析 / 安装 **node-pty** 时，插件会把步骤 **追加** 写入 **`<工作空间>/temp/plugin-<插件名>/pty-install.log`**（与是否成功无关）；失败时查看该文件末尾即可，无需额外配置。
+- **发版产物**：生产构建 **不** 含 `node_modules/node-pty`，详见 [node-pty-prebuild-cache.md](./node-pty-prebuild-cache.md)。
 - **安全提示**：终端可执行本机任意 shell 命令，请仅从可信来源安装本插件。
