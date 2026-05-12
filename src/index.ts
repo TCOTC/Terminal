@@ -55,6 +55,7 @@ export default class PluginTerminal extends Plugin {
     onload() {
         const fe = getFrontend();
         const isMobile = fe === "mobile" || fe === "browser-mobile";
+        let dockInitCancelled = false;
         this.addDock({
             config: {
                 position: "RightBottom",
@@ -95,30 +96,38 @@ export default class PluginTerminal extends Plugin {
                 }
                 const mount = el.querySelector(".Terminal__mount") as HTMLElement;
                 const canUsePty = getFrontend() === "desktop" && typeof (window as Window & {require?: unknown}).require === "function";
-                this.terminalDockApi = createSidebarTerminal({
-                    pluginName: this.name,
-                    layoutRoot: el,
-                    mount,
-                    canUsePty,
-                    i18n: {
-                        unsupportedEnv: this.i18n.unsupportedEnv as string,
-                        preparingPty: this.i18n.preparingPty as string,
-                        ptyFailed: this.i18n.ptyFailed as string,
-                    },
-                });
-                if (!isMobile) {
-                    el.querySelector('[data-type="fontSmaller"]')?.addEventListener("click", () => {
-                        this.terminalDockApi?.bumpFontSize(-1);
+                void (async () => {
+                    const api = await createSidebarTerminal({
+                        pluginName: this.name,
+                        layoutRoot: el,
+                        mount,
+                        canUsePty,
+                        i18n: {
+                            unsupportedEnv: this.i18n.unsupportedEnv as string,
+                            preparingPty: this.i18n.preparingPty as string,
+                            ptyFailed: this.i18n.ptyFailed as string,
+                        },
                     });
-                    el.querySelector('[data-type="fontLarger"]')?.addEventListener("click", () => {
-                        this.terminalDockApi?.bumpFontSize(1);
-                    });
-                }
+                    if (dockInitCancelled) {
+                        api.dispose();
+                        return;
+                    }
+                    this.terminalDockApi = api;
+                    if (!isMobile) {
+                        el.querySelector('[data-type="fontSmaller"]')?.addEventListener("click", () => {
+                            this.terminalDockApi?.bumpFontSize(-1);
+                        });
+                        el.querySelector('[data-type="fontLarger"]')?.addEventListener("click", () => {
+                            this.terminalDockApi?.bumpFontSize(1);
+                        });
+                    }
+                })();
             },
             resize: () => {
                 this.terminalDockApi?.fit();
             },
             destroy: () => {
+                dockInitCancelled = true;
                 this.terminalDockApi?.dispose();
                 this.terminalDockApi = undefined;
             },

@@ -2,6 +2,7 @@ import {Terminal} from "@xterm/xterm";
 import {FitAddon} from "@xterm/addon-fit";
 import {Unicode11Addon} from "@xterm/addon-unicode11";
 import "@xterm/xterm/css/xterm.css";
+import {Constants, fetchPost, fetchSyncPost} from "siyuan";
 import type {IDisposable, IPty, NodePtyModule} from "./nodePtyTypes";
 import {getPluginTempRootDir, needsOnlineNodePtyInstall, resolveNodePtyRoot} from "./nodePtyResolver";
 import {attachTerminalGpuRenderer, type TerminalGpuBackend} from "./terminalGpuRenderer";
@@ -35,7 +36,9 @@ function getNodeRequire(): NodeJS.Require | undefined {
 
 type SiyuanWindow = Window & {
     siyuan?: {
+        isPublish?: boolean;
         config?: {
+            readonly?: boolean;
             system?: {dataDir?: string; workspaceDir?: string};
             dataDir?: string;
             workspaceDir?: string;
@@ -47,6 +50,82 @@ type SiyuanWindow = Window & {
         };
     };
 };
+
+/** 写入 data/storage/local.json，与主程序其它 local 键并列，避免与其它功能冲突 */
+const TERMINAL_FONT_SIZE_STORAGE_KEY = "plugin-terminal-fontSize";
+
+function clampTerminalFontSizePx(n: number): number {
+    return Math.min(32, Math.max(8, Math.round(n)));
+}
+
+function parsePersistedTerminalFontSize(data: unknown): number | undefined {
+    if (typeof data === "number" && Number.isFinite(data)) {
+        return clampTerminalFontSizePx(data);
+    }
+    if (typeof data === "string") {
+        const t = data.trim();
+        if (t.length === 0) {
+            return undefined;
+        }
+        const n = Number(t);
+        if (Number.isFinite(n)) {
+            return clampTerminalFontSizePx(n);
+        }
+    }
+    return undefined;
+}
+
+/** 与 assets 注入的 `--b3-font-size-editor` 对齐，不依赖 config 对象字段是否已就绪 */
+function parseEditorFontSizeFromCssVar(): number | undefined {
+    if (typeof document === "undefined") {
+        return undefined;
+    }
+    const raw = getComputedStyle(document.documentElement).getPropertyValue("--b3-font-size-editor").trim();
+    if (!raw) {
+        return undefined;
+    }
+    const m = /^([\d.]+)\s*px$/i.exec(raw);
+    if (m) {
+        const n = Number(m[1]);
+        if (Number.isFinite(n)) {
+            return clampTerminalFontSizePx(n);
+        }
+    }
+    const n = Number.parseFloat(raw);
+    if (Number.isFinite(n)) {
+        return clampTerminalFontSizePx(n);
+    }
+    return undefined;
+}
+
+async function resolveInitialTerminalFontSizePx(): Promise<number> {
+    try {
+        const res = (await fetchSyncPost("/api/storage/getLocalStorageVal", {
+            key: TERMINAL_FONT_SIZE_STORAGE_KEY,
+        })) as {code?: number; data?: unknown};
+        if (res && res.code === 0) {
+            const parsed = parsePersistedTerminalFontSize(res.data);
+            if (parsed !== undefined) {
+                return parsed;
+            }
+        }
+    } catch (e) {
+        console.warn("[Terminal] 读取字号持久化失败", e);
+    }
+    return parseEditorFontSizeFromCssVar() ?? 11;
+}
+
+function persistTerminalFontSize(fontSize: number): void {
+    const sy = (window as SiyuanWindow).siyuan;
+    if (!sy || sy.config?.readonly || sy.isPublish) {
+        return;
+    }
+    fetchPost("/api/storage/setLocalStorageVal", {
+        app: Constants.SIYUAN_APPID,
+        key: TERMINAL_FONT_SIZE_STORAGE_KEY,
+        val: fontSize,
+    });
+}
 
 /** 与 VS Code 在「未单独设置 terminal.integrated.fontFamily」时回退到 editor.fontFamily 的策略对齐 */
 const FALLBACK_TERMINAL_FONT_FAMILY =
@@ -60,7 +139,7 @@ function isMacintoshHost(): boolean {
  * 对齐 VS Code `TerminalFontMetrics.getFont`：优先思源 `editor.fontFamily`，再追加 `, monospace`；
  * macOS 再追加 `AppleBraille`（与 VS Code 一致，避免盲文格显示异常）。
  */
-function resolveTerminalFontFromSiyuan(): {fontFamily: string; fontSize: number; fontWeight?: number} {
+function resolveTerminalFontFromSiyuan(fontSize: number): {fontFamily: string; fontSize: number; fontWeight?: number} {
     const editor = (window as SiyuanWindow).siyuan?.config?.editor;
     const raw = editor?.fontFamily?.trim();
     const base = raw && raw.length > 0 ? raw : FALLBACK_TERMINAL_FONT_FAMILY;
@@ -68,12 +147,9 @@ function resolveTerminalFontFromSiyuan(): {fontFamily: string; fontSize: number;
     if (isMacintoshHost()) {
         fontFamily += ", AppleBraille";
     }
-    const fs = editor?.fontSize;
-    const fontSize =
-        typeof fs === "number" && Number.isFinite(fs) ? Math.min(32, Math.max(8, Math.round(fs))) : 15;
     const w = editor?.fontWeight;
     const fontWeight = typeof w === "number" && w > 0 ? w : undefined;
-    return {fontFamily, fontSize, fontWeight};
+    return {fontFamily, fontSize: clampTerminalFontSizePx(fontSize), fontWeight};
 }
 
 /** 与内核写入插件目录的约定一致：{workspaceDataDir}/plugins/<name>（前端为 config.system.dataDir） */
@@ -318,14 +394,14 @@ function bindTerminalThemeToSiyuan(term: Terminal, cleanups: Array<() => void>):
     }
 }
 
-export function createSidebarTerminal(options: CreateSidebarTerminalOptions): {
+export async function createSidebarTerminal(options: CreateSidebarTerminalOptions): Promise<{
     dispose: () => void;
     fit: () => void;
     /** 按像素步进调整终端字号并 refit */
     bumpFontSize: (delta: number) => void;
     /** 当前 xterm 绘制后端：`webgl` | `canvas` | `dom`（WebGL 丢失上下文后会变为 `canvas`） */
     getRenderBackend: () => TerminalGpuBackend;
-} {
+}> {
     const {pluginName, layoutRoot, mount, canUsePty, i18n} = options;
     mount.textContent = "";
     mount.classList.add("Terminal__root");
@@ -334,7 +410,8 @@ export function createSidebarTerminal(options: CreateSidebarTerminalOptions): {
     termContainer.className = "Terminal__xterm";
     mount.append(termContainer);
 
-    const tf = resolveTerminalFontFromSiyuan();
+    const initialFontSize = await resolveInitialTerminalFontSizePx();
+    const tf = resolveTerminalFontFromSiyuan(initialFontSize);
     const term = new Terminal({
         /** Unicode11Addon 依赖 `terminal.unicode`（xterm 标记为 proposed API） */
         allowProposedApi: true,
@@ -382,12 +459,13 @@ export function createSidebarTerminal(options: CreateSidebarTerminalOptions): {
     };
 
     const bumpFontSize = (delta: number) => {
-        const current = term.options.fontSize ?? 15;
+        const current = term.options.fontSize ?? 11;
         const next = Math.min(32, Math.max(8, Math.round(current + delta)));
         if (next === current) {
             return;
         }
         term.options.fontSize = next;
+        persistTerminalFontSize(next);
         fit();
     };
 
