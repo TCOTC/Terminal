@@ -1,0 +1,38 @@
+/* 插件面板根（Tab.panelElement 已有 fn__flex-1）：占满 Dock 分配高度并向下传递 flex */
+.Terminal__panelRoot {
+  min-height: 0;
+  height: 100%;
+}
+
+/* 侧边栏终端：标题栏 + 终端区纵向铺满 */
+.Terminal__dock {
+  flex: 1;
+  min-height: 0;
+}
+
+.Terminal__mount.Terminal__root {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+}
+
+/* xterm 外层：flex 容器，避免 .xterm 只保留初次 fit 的像素高度、下方留白 */
+.Terminal__xterm {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.Terminal__xterm > .xterm {
+  flex: 1;
+  min-height: 0;
+}
+
+.Terminal__xterm .xterm-viewport,
+.Terminal__xterm .xterm-screen {
+  width: 100%;
+}

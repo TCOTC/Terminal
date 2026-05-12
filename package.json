@@ -6,17 +6,25 @@
   "scripts": {
     "lint": "eslint . --fix --cache",
     "dev": "webpack --mode development",
-    "build": "webpack --mode production"
+    "build": "webpack --mode production",
+    "rebuild-native": "electron-rebuild -f -w node-pty"
   },
   "keywords": [],
   "author": "TCOTC",
   "license": "MIT",
+  "dependencies": {
+    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/xterm": "^5.5.0",
+    "node-pty": "^1.0.0"
+  },
   "devDependencies": {
+    "@electron/rebuild": "^3.7.0",
     "@eslint/eslintrc": "^3.3.3",
     "@eslint/js": "^9.39.1",
     "@typescript-eslint/eslint-plugin": "8.40.0",
     "@typescript-eslint/parser": "8.40.0",
     "copy-webpack-plugin": "^11.0.0",
+    "electron": "41.5.1",
     "css-loader": "^6.7.1",
     "esbuild-loader": "^3.0.1",
     "eslint": "^9.33.0",

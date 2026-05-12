@@ -3,7 +3,7 @@
   "author": "TCOTC",
   "url": "https://github.com/TCOTC/Terminal",
   "version": "1.0.0",
-  "minAppVersion": "3.7.0",
+  "minAppVersion": "3.6.5",
   "backends": [
     "windows",
     "linux",
